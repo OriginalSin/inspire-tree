@@ -5,9 +5,22 @@
         <title>InspireTree</title>
         <link rel="stylesheet" href="../build/inspire-tree.css" />
         <link rel="stylesheet" href="demo.css" />
+        <style>
+            .tree {
+                float: left;
+                height: 500px;
+                overflow: auto;
+                width: 50%;
+            }
+
+            .log {
+                float: right;
+                width: 50%;
+            }
+        </style>
     </head>
     <body>
-        <p>Loads 100 company nodes with 100 employees each.</p>
+        <p>Loads 1000 root nodes and renders nodes on scroll.</p>
         <div class="tree"></div>
         <ul class="log"></ul>
     </body>
@@ -20,8 +33,15 @@
         ], function($, InspireTree) {
             var tree = new InspireTree({
                 target: '.tree',
-                data: $.getJSON('sample-data/large.json')
+                dom: {
+                    deferredRendering: true
+                },
+                data: $.getJSON('sample-data/large-root.json')
             });
+
+            // tree.onAny(function() {
+            //     console.log(arguments);
+            // })
 
             var lastTime = (new Date()).getTime();
             function getTimeSince() {
@@ -40,6 +60,10 @@
 
             tree.on('model.loaded', function() {
                 $log.append('<li>Data parsed into model...' + getTimeSince() + 'ms</li>');
+            });
+
+            tree.on('dom.rendering.batch', function(range, limit) {
+                $log.append('<li>Rendering range: ' + range[0] + ', ' + range[1] + '</li>');
             });
         });
     </script>

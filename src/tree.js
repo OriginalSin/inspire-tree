@@ -56,10 +56,12 @@ export default class InspireTree extends EventEmitter2 {
             },
             contextMenu: false,
             data: false,
-            dragTargets: false,
             dom: {
+                deferredRendering: false,
+                nodeHeight: 25,
                 showCheckboxes: false
             },
+            dragTargets: false,
             editable: false,
             editing: {
                 add: false,
@@ -146,6 +148,7 @@ export default class InspireTree extends EventEmitter2 {
             indeterminate: false,
             loading: false,
             removed: false,
+            rendered: false,
             selectable: true,
             selected: false
         };
@@ -691,7 +694,9 @@ export default class InspireTree extends EventEmitter2 {
         var tree = this;
 
         var promise = new Promise(function(resolve, reject) {
-            var complete = function(nodes) {
+            var complete = function(nodes, totalRecords) {
+                // tree.dom.setNodeCanvasHeight(totalRecords);
+
                 // Delay event for synchronous loader. Otherwise it fires
                 // before the user has a chance to listen.
                 if (!tree.initialized && _.isArray(nodes)) {

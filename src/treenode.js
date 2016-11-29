@@ -656,7 +656,11 @@ export class TreeNode {
             node.markDirty();
             node._tree.dom.applyChanges();
 
-            var complete = function(results) {
+            var complete = function(results, totalRecords) {
+                if (totalRecords && totalRecords > results.length) {
+                    console.log('children total records', totalRecords);
+                }
+
                 node._tree.dom.batch();
                 node.state('loading', false);
                 node.children = collectionToModel(node._tree, results, node);
@@ -975,6 +979,19 @@ export class TreeNode {
     }
 
     /**
+     * Get whether this node has been rendered.
+     *
+     * Will be false if deferred rendering is enable and the node has
+     * not yet been loaded, or if a custom DOM renderer is used.
+     *
+     * @category TreeNode
+     * @return {boolean} Get if node rendered.
+     */
+    rendered() {
+        return this.state('rendered');
+    }
+
+    /**
      * Restore state if soft-removed.
      *
      * @category TreeNode
@@ -1209,7 +1226,7 @@ export class TreeNode {
         var node = this;
 
         var isVisible = true;
-        if (node.hidden() || node.removed()) {
+        if (node.hidden() || node.removed() || !node.rendered()) {
             isVisible = false;
         }
         else if (node.hasParent()) {

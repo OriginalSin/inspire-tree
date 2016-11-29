@@ -85,11 +85,13 @@ that you should be aware of. There are a few choices:
 
 - **allowLoadEvents** - Array of state-change events to fire for pre-set states.
 - **checkbox**
-    - **autoCheckChildren** - Automatically check/uncheck children when parent toggled.
+    + **autoCheckChildren** - Automatically check/uncheck children when parent toggled.
 - **contextMenu** - Array of choices (object with `text` property, `handler` function) for a custom context menu.
 - **data** - An array, promise, or callback function.
 - **dom**
-    - **showCheckboxes** - Show checkbox inputs.
+    + **deferredRendering** - Only render nodes as the user scrolls them into view. (See "Deferrals" section below.)
+    + **nodeHeight** - Height (in pixels) of the node DOM elements. Used only if `deferredRendering` is enabled.
+    + **showCheckboxes** - Show checkbox inputs.
 - **dragTargets** - Array of other tree elements which accept drag/drop.
 - **editable** - Allow inline editing.
 - **editing** (defaults to true if `editable` is true)
@@ -143,6 +145,7 @@ tree.on('node.click', function(event, node) {
 - **children.loaded** - `(TreeNode node)` - Children were dynamically loaded for a node.
 - **data.loaded** - `(Array nodes)` - Data has been loaded successfully (only for data loaded via xhr/callbacks).
 - **data.loaderror** - `(Error err)` - Loading failed.
+- **dom.rendering.batch** `Array(start, end), int limit` - A new node batch is being rendered.
 - **model.loaded** - `(Array nodes)` - Data has been parsed into an internal model.
 - **node.added** - `(TreeNode node)` - Node added.
 - **node.blurred** - `(TreeNode node)` - Node lost focus.
@@ -236,6 +239,23 @@ tree.nodes().expandDeep();
 
 Most `TreeNodes` methods are mapped to the `tree` instance to ease working with all nodes. Instead of using `tree.nodes().someMethod()` you can
 use `tree.someMethod()`.
+
+## Deferrals
+
+In addition to loading children dynamically, there are several options to help break up large trees (1000s of single level nodes).
+
+### Deferred Rendering
+
+Deferred Rendering avoids creating DOM elements for nodes which the user cannot see. As the user scrolls, new "pages"
+of nodes will be rendered.
+
+To work properly, you need to:
+
+- Enable `dom.deferredRendering` in the configuration.
+- Set a `nodeHeight` in the configuration. InspireTree uses this to calculate the space needed to show all nodes. This does not affect styling.
+- Set a `height` and/or `max-height` and your choice of `overflow` (allowing scrolling) on the `.inspire-tree` element via CSS.
+
+The `nodeHeight` should match the total height of your node elements.
 
 ## Custom Rendering
 

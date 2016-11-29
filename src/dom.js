@@ -4,9 +4,9 @@
 import * as _ from 'lodash';
 import { create as createElement, diff, h, patch } from 'virtual-dom';
 import { DOMReference } from './lib/DOMReference';
+import uuid from 'uuid';
 import { VCache } from './lib/VCache';
 import { VArrayDirtyCompare } from './lib/VArrayDirtyCompare';
-import { VDirtyCompare } from './lib/VDirtyCompare';
 import { VStateCompare } from './lib/VStateCompare';
 
 /**
@@ -39,6 +39,8 @@ export default class InspireDOM {
         this._tree = tree;
         this.batching = 0;
         this.dropTargets = [];
+        this.$scrollLayer;
+        this.maxRenderIndex = 0;
 
         // Cache because we use in loops
         this.isDynamic = _.isFunction(this._tree.config.data);
@@ -75,6 +77,7 @@ export default class InspireDOM {
     attach(target) {
         var dom = this;
         dom.$target = dom.getElement(target);
+        dom.$scrollLayer = dom.getScrollableAncestor(dom.$target);
 
         if (!dom.$target) {
             throw new Error('No valid element to attach to.');
@@ -97,6 +100,14 @@ export default class InspireDOM {
 
         // Handle keyboard interaction
         dom.$target.addEventListener('keyup', dom.keyboardListener.bind(dom));
+
+        // if (dom._tree.config.dom.deferredRendering || dom._tree.config.deferredLoading) {
+        //     dom.$target.addEventListener('scroll', _.throttle(dom.scrollListener.bind(dom), 100));
+        // }
+
+        this.pagination = {
+            maxIndex: this.getViewportHeightInNodes()
+        };
 
         if (dom.contextMenuChoices) {
             document.body.addEventListener('click', function() {
@@ -131,6 +142,17 @@ export default class InspireDOM {
             if (elem !== document.activeElement) {
                 elem.focus();
             }
+        });
+
+        var maxIndex = this.getViewportHeightInNodes();
+        dom._tree.on('model.loaded', function() {
+            dom._tree.nodes().recurseDown(function(node) {
+                if (node.children) {
+                    node.itree.pagination = {
+                        maxIndex: maxIndex
+                    };
+                }
+            });
         });
 
         dom.$target.inspireTree = dom._tree;
@@ -385,8 +407,12 @@ export default class InspireDOM {
         var dom = this;
 
         return new VCache({
-            dirty: node.itree.dirty
-        }, VDirtyCompare, function() {
+            dirty: node.itree.dirty,
+            text: node.text
+        }, VStateCompare, function() {
+            // Mark as rendered
+            node.state('rendered', true);
+
             var attributes = node.itree.li.attributes || {};
             node.itree.ref = new DOMReference();
 
@@ -442,7 +468,7 @@ export default class InspireDOM {
             contents.push(h('div.wholerow'));
 
             if (node.hasChildren()) {
-                contents.push(dom.createOrderedList(node.children));
+                contents.push(dom.createOrderedList(node.children, node));
             }
             else if (dom.isDynamic && !node.hasLoadedChildren()) {
                 contents.push(dom.createEmptyListItemNode(true));
@@ -496,6 +522,7 @@ export default class InspireDOM {
 
             return h('li' + classNames, {
                 attributes: attributes,
+                key: node.id,
                 ref: node.itree.ref
             }, contents);
         });
@@ -517,21 +544,88 @@ export default class InspireDOM {
     }
 
     /**
+     * Creates an anchor that loads more nodes when clicked.
+     *
+     * Cannot be selected or expanded.
+     *
+     * @private
+     * @param {TreeNode} context Parent node or undefined for root.
+     * @return {object} List Item node.
+     */
+    createLoadMoreNode(context) {
+        var dom = this;
+
+        return new VCache({}, VStateCompare, function() {
+            return h('li.leaf', {
+                key: uuid.v4()
+            }, [
+                h('a.title.icon.icon-expand.load-more', {
+                    key: uuid.v4(),
+                    onclick: function(event) {
+                        event.preventDefault();
+
+                        if (context) {
+                            context.itree.pagination.maxIndex += dom.getViewportHeightInNodes();
+                            context.markDirty();
+                        }
+                        else {
+                            dom.pagination.maxIndex += dom.getViewportHeightInNodes();
+                        }
+
+                        dom.applyChanges();
+                    }
+                }, ['Load More...'])
+            ]);
+        });
+    }
+
+    /**
      * Creates an ordered list containing list item for
      * provided data nodes.
      *
      * @private
-     * @param {array} nodes Data nodes.
+     * @param {TreeNodes} nodes Data nodes.
+     * @param {TreeNode} context Parent node, if any.
      * @return {object} Oredered List node.
      */
-    createOrderedList(nodes) {
-        var dom = this;
+    createOrderedList(nodes, context) {
+        var opts = {};
+        var maxIndex = 0;
+        var renderNodes = nodes;
+
+        // // If using deferrals, set the expected height of this OL
+        // if (this._tree.config.dom.deferredRendering || this._tree.config.deferredLoading) {
+        //     opts.style = {
+        //         height: (this._tree.config.dom.nodeHeight * nodes.length) + 'px'
+        //     };
+        // }
+
+        // If rendering deferred, chunk the nodes client-side
+        if (this._tree.config.dom.deferredRendering) {
+            // Determine the maxIndex. Either for our current context or for the root level
+            if (context) {
+                maxIndex = _.get(context, 'itree.pagination.maxIndex', this.getViewportHeightInNodes());
+            }
+            else {
+                maxIndex = this.pagination.maxIndex;
+            }
+
+            // Slice the current nodes by this context's pagination
+            renderNodes = _.slice(nodes, 0, maxIndex);
+        }
+
+        var contents = [this.createListItemNodes(renderNodes)];
+
+        // If deferred rendering and we have nodes remaining, show a Load More... link
+        if (this._tree.config.dom.deferredRendering && maxIndex < nodes.length) {
+            contents.push(this.createLoadMoreNode(context));
+        }
 
         return new VCache({
-            nodes: nodes,
-            nodeCount: nodes.length
-        }, VArrayDirtyCompare, function() {
-            return h('ol', dom.createListItemNodes(nodes));
+            nodes: renderNodes,
+            nodeCount: renderNodes.length
+        }, VArrayDirtyCompare, () => {
+            return h('ol', opts, contents);
         });
     }
 
@@ -758,6 +852,20 @@ export default class InspireDOM {
     }
 
     /**
+     * Calculates the total height of currently rendered and visible nodes.
+     *
+     * @private
+     * @return {integer} Height in pixels.
+     */
+    getNodeCanvasHeight() {
+        // How many nodes are rendered and visible now (or on first load, how many will be)
+        var nodesDisplayed = this._tree.visible().length || this.pagination.perPage;
+
+        // Calculate the total height of currently rendered nodes
+        return nodesDisplayed * this._tree.config.dom.nodeHeight;
+    }
+
+    /**
      * Helper method to find a scrollable ancestor element.
      *
      * @param  {HTMLElement} $element Starting element.
@@ -772,6 +880,16 @@ export default class InspireDOM {
         }
 
         return $element;
+    }
+
+    /**
+     * Calcalcates how many nodes fit within the containing element.
+     *
+     * @private
+     * @return {integer} Node count
+     */
+    getViewportHeightInNodes() {
+        return _.ceil(this.$scrollLayer.clientHeight / this._tree.config.dom.nodeHeight);
     }
 
     /**
@@ -958,43 +1076,131 @@ export default class InspireDOM {
      * @return {void}
      */
     renderNodes(nodes) {
-        var dom = this;
-
-        if (dom.rendering) {
+        if (this.rendering) {
             return;
         }
 
-        dom.rendering = true;
+        this.rendering = true;
 
-        var newOl = dom.createOrderedList(nodes || dom._tree.nodes());
+        var newOl = this.createOrderedList(nodes || this._tree.nodes());
 
-        if (!dom.rootNode) {
-            dom.rootNode = createElement(newOl);
-            dom.$target.appendChild(this.rootNode);
+        if (!this.rootNode) {
+            this.rootNode = createElement(newOl);
+            this.$target.appendChild(this.rootNode);
 
-            if (dom._tree.config.editing.add) {
-                dom.$target.appendChild(createElement(new VCache({}, VArrayDirtyCompare, function() {
+            if (this._tree.config.editing.add) {
+                this.$target.appendChild(createElement(new VCache({}, VArrayDirtyCompare, () => {
                     return h('a.btn.icon.icon-plus', {
                         attributes: {
                             title: 'Add a new root node'
                         },
                         onclick: function() {
-                            dom._tree.focused().blur();
+                            this._tree.focused().blur();
 
-                            dom._tree.addNode(blankNode());
+                            this._tree.addNode(blankNode());
                         }
                     });
                 })));
             }
         }
         else {
-            var patches = diff(dom.ol, newOl);
-            dom.rootNode = patch(dom.rootNode, patches);
+            var patches = diff(this.ol, newOl);
+            this.rootNode = patch(this.rootNode, patches);
         }
 
-        dom.ol = newOl;
-        dom.rendering = false;
+        this.ol = newOl;
+        this.rendering = false;
     };
+
+    /**
+     * Listens for scroll events on the scrollable element.
+     *
+     * @category DOM
+     * @private
+     * @return {void}
+     */
+    scrollListener() {
+        if (!this.rendering) {
+            // Get the bounding rect of the scroll layer
+            var rect = this.$scrollLayer.getBoundingClientRect();
+
+            // Pick the middle of the bottom node space
+            var centerX = rect.left + (rect.right - rect.left) / 2;
+            var centerY = rect.bottom - (this._tree.config.dom.nodeHeight / 2);
+
+            // Lookup which element is currently at those coordinates
+            var elem = document.elementFromPoint(centerX, centerY);
+
+            // Lookup the parent list item for the uid, or none for the root level
+            var $parentLi;
+            if (elem.tagName === 'A') {
+                $parentLi = elem.parentNode.parentNode;
+            }
+            else if (elem.tagName === 'OL') {
+                $parentLi = elem.parentNode;
+            }
+
+            // Convert the parent list item to a TreeNode
+            var parentNode;
+            var node;
+            if ($parentLi) {
+                node = this._tree.node($parentLi.getAttribute('data-uid'));
+                if (node && node.hasParent()) {
+                    parentNode = node.getParent();
+                }
+            }
+
+            // If we're close to the last node for this parent, render more
+            if (parentNode && node) {
+                var index = _.indexOf(parentNode.children, node);
+                var boundary = parentNode.itree.pagination.maxIndex - 2;
+
+                if (index > boundary) {
+                    parentNode.itree.pagination.maxIndex += this.getViewportHeightInNodes();
+
+                    parentNode.markDirty();
+                    this.applyChanges();
+                }
+            }
+            else {
+                console.log('parent', _.get(parentNode, 'text'), 'node', _.get(node, 'text'));
+            }
+
+            // console.log('scroll listener... fix me');
+            // // this.renderNodes(this.getRenderableNodes());
+            // //
+            // // // Diff the expected display height by amount scrolled
+
+            // // var offsetCanvasHeight = this.getNodeCanvasHeight() - this.$scrollLayer.scrollTop;
+            //
+
+            //
+            // var diff = _.floor(top / this._tree.config.dom.nodeHeight);
+            //
+            // var heightInNodes = this.getViewportHeightInNodes();
+            //
+            // var nodeIndexAtBottom = diff + heightInNodes;
+            //
+            // console.log('diff', diff, 'nodeIndexAtBottom', nodeIndexAtBottom);
+            //
+            // this._tree.nodes().recurseDown((node) => {
+            //     if (node.children && node.expanded()) {
+            //         var i = node.itree.pagination.maxIndex;
+            //         console.log(i);
+            //     }
+            // });
+
+            //
+            // // If our height is below the viewport height, we've reached the bottom
+            // if (height < this.$scrollLayer.clientHeight) {
+            //     // Allow rendering of a viewport's-worth of nodes
+            //     this.maxRenderIndex += this.pagination.perPage;
+            //     console.log('batching', [0, this.maxRenderIndex], this.pagination.perPage);
+            //
+            //     this._tree.emit('dom.rendering.batch', [0, this.maxRenderIndex], this.pagination.perPage);
+            // }
+        }
+    }
 
     /**
      * Scroll the first selected node into view.
@@ -1007,12 +1213,8 @@ export default class InspireDOM {
         var $tree = document.querySelector('.inspire-tree');
         var $selected = $tree.querySelector('.selected');
 
-        if ($selected) {
-            var $container = this.getScrollableAncestor($tree);
-
-            if ($container) {
-                $container.scrollTop = $selected.offsetTop;
-            }
+        if ($selected && dom.$scrollLayer) {
+            dom.$scrollLayer.scrollTop = $selected.offsetTop;
         }
     }
 }
